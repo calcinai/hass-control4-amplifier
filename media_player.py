@@ -14,26 +14,10 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, NUM_OUTPUTS
-from .coordinator import Control4AmpCoordinator, InputSource
+from .const import DOMAIN, NUM_OUTPUTS, CONF_INPUTS, CONF_OUTPUTS, DEFAULT_INPUT_LABELS, DEFAULT_OUTPUT_LABELS
+from .coordinator import Control4AmpCoordinator
 
 _LOGGER = logging.getLogger(__name__)
-
-DEFAULT_INPUT_LABELS = {
-    1: "Analog Input 1",
-    2: "Analog Input 2",
-    3: "Analog Input 3",
-    4: "Analog Input 4",
-    5: "Digital Input 1",
-    6: "Digital Input 2",
-}
-
-DEFAULT_OUTPUT_LABELS = {
-    1: "Stereo Output 1",
-    2: "Stereo Output 2",
-    3: "Stereo Output 3",
-    4: "Stereo Output 4",
-}
 
 SUPPORT_CONTROL4_AMP = (
         MediaPlayerEntityFeature.VOLUME_SET
@@ -48,10 +32,18 @@ async def async_setup_entry(
     """Set up Control4 Amplifier from config entry."""
     coordinator: Control4AmpCoordinator = hass.data[DOMAIN][config_entry.entry_id]
 
-    # Create child entities
+    # Get enabled outputs from config
+    enabled_outputs = []
+    output_configs = config_entry.data.get(CONF_OUTPUTS, {})
+    for output_id in range(1, NUM_OUTPUTS + 1):
+        output_config = output_configs.get(str(output_id))
+        if output_config:  # If output is configured, create entity
+            enabled_outputs.append(output_id)
+
+    # Create child entities only for enabled outputs
     child_entities = [
         Control4AmpMediaPlayer(coordinator, config_entry, output_id)
-        for output_id in range(1, NUM_OUTPUTS + 1)
+        for output_id in enabled_outputs
     ]
 
     # Create parent entity
@@ -84,7 +76,7 @@ class Control4AmpParentMediaPlayer(MediaPlayerEntity):
         self._attr_name = config_entry.title or "Control4 Amplifier"
 
         # Initial update of labels
-        self._update_labels_from_options()
+        self._update_labels()
 
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added to hass."""
@@ -98,21 +90,28 @@ class Control4AmpParentMediaPlayer(MediaPlayerEntity):
     @callback
     async def async_config_entry_updated(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Handle config entry updates."""
-        self._update_labels_from_options()
+        self._update_labels()
         self.async_write_ha_state()
 
-    def _update_labels_from_options(self) -> None:
-        """Update labels from config entry options."""
-        options = self._config_entry.options
+    def _update_labels(self) -> None:
+        """Update labels from config entry data."""
+        input_configs = self._config_entry.data.get(CONF_INPUTS, {})
 
         # Update input labels only for enabled inputs
         self._input_labels = {}
         for i in range(1, 7):  # 6 total inputs (4 analog + 2 digital)
-            if options.get(f"input_{i}_enabled", True):  # Only include enabled inputs
-                self._input_labels[str(i)] = options.get(
-                    f"input_{i}_name",
-                    DEFAULT_INPUT_LABELS[i]
-                )
+            input_config = input_configs.get(str(i), {})
+            if input_config and input_config.get("enabled", True):  # Only include enabled inputs
+                self._input_labels[str(i)] = input_config.get("name", DEFAULT_INPUT_LABELS[i])
+
+        # Clear current input if it's been disabled
+        if hasattr(self, '_current_input') and str(self._current_input) not in self._input_labels:
+            self._current_input = None
+
+        _LOGGER.debug(
+            "Parent: Updated input labels: %s",
+            self._input_labels
+        )
 
     @property
     def state(self) -> MediaPlayerState:
@@ -187,7 +186,7 @@ class Control4AmpMediaPlayer(MediaPlayerEntity):
         self._treble_level = 0
 
         # Initial update of labels
-        self._update_labels_from_options()
+        self._update_labels()
 
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added to hass."""
@@ -198,85 +197,42 @@ class Control4AmpMediaPlayer(MediaPlayerEntity):
             self._config_entry.add_update_listener(self.async_config_entry_updated)
         )
 
-        @callback
-        def _handle_volume_changed(event):
-            """Handle volume changes."""
-            if event.data["output"] == self._output_id:
-                self._volume = event.data["volume"]
-                self.async_write_ha_state()
-
-        @callback
-        def _handle_input_changed(event):
-            """Handle input changes."""
-            if event.data["output"] == self._output_id:
-                # Map the physical input back to logical input
-                input_type = event.data["input_type"]
-                physical_number = event.data["state"]
-                for logical_input, (source_type, phys_num) in self.coordinator._input_map.items():
-                    if (input_type == "digital" and source_type == InputSource.DIGITAL or
-                        input_type == "analog" and source_type == InputSource.ANALOG) and \
-                            phys_num == physical_number:
-                        # Only update if the input is enabled
-                        if str(logical_input) in self._input_labels:
-                            self._current_input = logical_input
-                            break
-                self.async_write_ha_state()
-
-        @callback
-        def _handle_bass_changed(event):
-            """Handle bass changes."""
-            if event.data["output"] == self._output_id:
-                self._bass_level = event.data["level"]
-                self.async_write_ha_state()
-
-        @callback
-        def _handle_treble_changed(event):
-            """Handle treble changes."""
-            if event.data["output"] == self._output_id:
-                self._treble_level = event.data["level"]
-                self.async_write_ha_state()
-
-        self.async_on_remove(
-            self.hass.bus.async_listen(f"{DOMAIN}_volume_changed", _handle_volume_changed)
-        )
-        self.async_on_remove(
-            self.hass.bus.async_listen(f"{DOMAIN}_input_changed", _handle_input_changed)
-        )
-        self.async_on_remove(
-            self.hass.bus.async_listen(f"{DOMAIN}_bass_changed", _handle_bass_changed)
-        )
-        self.async_on_remove(
-            self.hass.bus.async_listen(f"{DOMAIN}_treble_changed", _handle_treble_changed)
-        )
-
     @callback
     async def async_config_entry_updated(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Handle config entry updates."""
-        self._update_labels_from_options()
-        self.async_write_ha_state()
-
-    def _update_labels_from_options(self) -> None:
-        """Update labels from config entry options."""
-        options = self._config_entry.options
-
-        # Update input labels only for enabled inputs
-        self._input_labels = {}
-        for i in range(1, 7):  # 6 total inputs (4 analog + 2 digital)
-            if options.get(f"input_{i}_enabled", True):  # Only include enabled inputs
-                self._input_labels[str(i)] = options.get(
-                    f"input_{i}_name",
-                    DEFAULT_INPUT_LABELS[i]
-                )
-
-        # Update output name if custom label exists
-        self._attr_name = options.get(
-            f"output_{self._output_id}_name",
-            DEFAULT_OUTPUT_LABELS[self._output_id]
-        )
-
+        self._update_labels()
         # If current input is disabled, clear it
         if self._current_input and str(self._current_input) not in self._input_labels:
             self._current_input = None
+        self.async_write_ha_state()
+
+    def _update_labels(self) -> None:
+        """Update labels from config entry data."""
+        input_configs = self._config_entry.data.get(CONF_INPUTS, {})
+        output_configs = self._config_entry.data.get(CONF_OUTPUTS, {})
+
+        # Update input labels only for enabled inputs
+        self._input_labels = {}
+        for i in range(1, 7):
+            str_i = str(i)
+            input_config = input_configs.get(str_i, {})
+            if input_config and input_config.get("enabled", True):
+                self._input_labels[str_i] = input_config.get("name", DEFAULT_INPUT_LABELS[i])
+
+        # Update output name if custom label exists
+        output_config = output_configs.get(str(self._output_id), {})
+        self._attr_name = output_config.get("name", DEFAULT_OUTPUT_LABELS[self._output_id])
+
+        # Clear current input if it's been disabled
+        if self._current_input and str(self._current_input) not in self._input_labels:
+            self._current_input = None
+
+        _LOGGER.debug(
+            "Output %s: Updated labels: inputs=%s, name=%s",
+            self._output_id,
+            self._input_labels,
+            self._attr_name
+        )
 
     @property
     def state(self) -> MediaPlayerState:
@@ -327,16 +283,4 @@ class Control4AmpMediaPlayer(MediaPlayerEntity):
         """Set volume level."""
         await self.coordinator.async_set_volume(self._output_id, volume)
         self._volume = volume
-        self.async_write_ha_state()
-
-    async def async_set_bass(self, level: int) -> None:
-        """Set bass level."""
-        await self.coordinator.async_set_bass(self._output_id, level)
-        self._bass_level = level
-        self.async_write_ha_state()
-
-    async def async_set_treble(self, level: int) -> None:
-        """Set treble level."""
-        await self.coordinator.async_set_treble(self._output_id, level)
-        self._treble_level = level
         self.async_write_ha_state()

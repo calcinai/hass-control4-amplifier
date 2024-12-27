@@ -1,19 +1,16 @@
 {
   "domain": "control4_amplifier",
   "name": "Control4 Audio Matrix Amplifier",
-  "documentation": "https://github.com/calcinai/hass-control4-amplifier",
-  "issue_tracker": "https://github.com/calcinai/hass-control4-amplifier",
   "codeowners": [
     "@calcinai"
   ],
   "config_flow": true,
-  "ssdp": [
-    {
-      "st": "c4:v1_8chanamp"
-    }
-  ],
-  "version": "1.0.0",
-  "iot_class": "local_push",
+  "documentation": "https://github.com/calcinai/hass-control4-amplifier",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/calcinai/hass-control4-amplifier/issues",
   "requirements": [],
-  "integration_type": "device"
+  "ssdp": [{
+    "st": "c4:v1_8chanamp"
+  }],
+  "version": "1.0.0"
 }

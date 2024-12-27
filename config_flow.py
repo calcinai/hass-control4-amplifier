@@ -1,240 +1,236 @@
-"""Config flow for Control4 Amplifier."""
+"""Config flow for Control4 Amplifier integration."""
 from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import urlparse
 
 import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.components import ssdp
-from homeassistant.const import CONF_NAME
+from homeassistant.const import CONF_HOST, CONF_NAME, CONF_PORT
+from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
-from homeassistant.helpers import selector
 
 from .const import (
-    ATTR_MAC_ADDRESS,
-    CONF_IP_ADDRESS,
-    DEFAULT_NAME,
+    CONF_INPUTS,
+    CONF_OUTPUTS,
+    DEFAULT_PORT,
     DOMAIN,
-    NUM_ANALOG_INPUTS,
-    NUM_DIGITAL_INPUTS,
-    NUM_OUTPUTS,
+    DEFAULT_INPUT_LABELS,
+    DEFAULT_OUTPUT_LABELS,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
-DEFAULT_INPUT_NAMES = {
-    "analog": "Analog Input {number}",
-    "digital": "Digital Input {number}"
-}
+STEP_USER_DATA_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_HOST): str,
+        vol.Optional(CONF_PORT, default=DEFAULT_PORT): int,
+        vol.Optional(CONF_NAME): str,
+    }
+)
 
-DEFAULT_OUTPUT_NAME = "Stereo Output {number}"
+def create_default_inputs_config():
+    """Create default input configuration."""
+    return {
+        "1": {"name": "Analog Input 1", "enabled": True},
+        "2": {"name": "Analog Input 2", "enabled": True},
+        "3": {"name": "Analog Input 3", "enabled": True},
+        "4": {"name": "Analog Input 4", "enabled": True},
+        "5": {"name": "Digital Input 1", "enabled": True},
+        "6": {"name": "Digital Input 3", "enabled": True},
+    }
 
+def create_default_outputs_config():
+    """Create default output configuration."""
+    return {
+        str(i): {
+            "name": DEFAULT_OUTPUT_LABELS[i]
+        } for i in range(1, 5)
+    }
 
-class Control4AmplifierConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class Control4AmpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Control4 Amplifier."""
 
     VERSION = 1
 
     def __init__(self) -> None:
         """Initialize the config flow."""
-        self._discovered_ip: str | None = None
-        self._discovered_mac: str | None = None
+        self._host: str | None = None
+        self._name: str | None = None
+        self._port: int = DEFAULT_PORT
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+            config_entry: config_entries.ConfigEntry,
+    ) -> Control4AmpOptionsFlow:
+        """Get the options flow for this handler."""
+        return Control4AmpOptionsFlow(config_entry)
 
     async def async_step_user(
             self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle a flow initialized by the user."""
-        errors = {}
+        """Handle the initial step."""
+        errors: dict[str, str] = {}
 
         if user_input is not None:
+            self._host = user_input[CONF_HOST]
+            self._name = user_input.get(CONF_NAME)
+            self._port = user_input.get(CONF_PORT, DEFAULT_PORT)
+
+            # Create entry with all configuration in data
+            await self.async_set_unique_id(self._host)
+            self._abort_if_unique_id_configured()
+
+            title = self._name or self._host
             return self.async_create_entry(
-                title=user_input[CONF_NAME],
+                title=title,
                 data={
-                    CONF_IP_ADDRESS: user_input[CONF_IP_ADDRESS],
-                },
+                    CONF_HOST: self._host,
+                    CONF_PORT: self._port,
+                    CONF_NAME: self._name,
+                    CONF_INPUTS: create_default_inputs_config(),
+                    CONF_OUTPUTS: create_default_outputs_config(),
+                }
             )
 
         return self.async_show_form(
-            step_id="user",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_NAME, default=DEFAULT_NAME): str,
-                    vol.Required(CONF_IP_ADDRESS): str,
-                }
-            ),
-            errors=errors,
+            step_id="user", data_schema=STEP_USER_DATA_SCHEMA, errors=errors
         )
 
     async def async_step_ssdp(self, discovery_info: ssdp.SsdpServiceInfo) -> FlowResult:
-        """Handle a flow initialized by SSDP discovery."""
-        _LOGGER.debug("SSDP discovery_info: %s", discovery_info)
+        """Handle SSDP discovery."""
+        netloc = urlparse(discovery_info.ssdp_location).netloc
+        self._host = netloc.split(":")[0]
+        self._name = discovery_info.upnp.get("friendlyName", self._host)
 
-        if not discovery_info.ssdp_st.startswith("c4:v1_8chanamp"):
-            return self.async_abort(reason="not_control4_amplifier")
+        await self.async_set_unique_id(self._host)
+        self._abort_if_unique_id_configured()
 
-        if discovery_info.ssdp_usn:
-            mac = discovery_info.ssdp_usn.split(":")[-1].replace("-", ":")
-        else:
-            return self.async_abort(reason="no_mac_address")
+        self.context["title_placeholders"] = {"name": self._name}
+        return await self.async_step_confirm()
 
-        await self.async_set_unique_id(mac)
-        self._abort_if_unique_id_configured(
-            updates={
-                CONF_IP_ADDRESS: discovery_info.ssdp_location.split(":")[0]
-            }
-        )
-
-        self._discovered_ip = discovery_info.ssdp_location.split(":")[0]
-        self._discovered_mac = mac
-
-        return await self.async_step_confirm_discovery()
-
-    async def async_step_confirm_discovery(
+    async def async_step_confirm(
             self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle user-confirmation of discovered device."""
+        """Handle user confirmation of discovered device."""
         if user_input is not None:
             return self.async_create_entry(
-                title=DEFAULT_NAME,
+                title=self._name or self._host,
                 data={
-                    CONF_IP_ADDRESS: self._discovered_ip,
-                    ATTR_MAC_ADDRESS: self._discovered_mac,
-                },
+                    CONF_HOST: self._host,
+                    CONF_PORT: self._port,
+                    CONF_NAME: self._name,
+                    CONF_INPUTS: create_default_inputs_config(),
+                    CONF_OUTPUTS: create_default_outputs_config(),
+                }
             )
 
-        placeholders = {
-            "host": self._discovered_ip,
-        }
-
         return self.async_show_form(
-            step_id="confirm_discovery",
-            description_placeholders=placeholders,
+            step_id="confirm",
+            description_placeholders={
+                "name": self._name,
+                "host": self._host,
+            },
         )
 
-    @staticmethod
-    def async_get_options_flow(
-            config_entry: config_entries.ConfigEntry,
-    ) -> Control4AmplifierOptionsFlow:
-        """Get the options flow for this handler."""
-        return Control4AmplifierOptionsFlow(config_entry)
-
-
-class Control4AmplifierOptionsFlow(config_entries.OptionsFlow):
-    """Handle options."""
+class Control4AmpOptionsFlow(config_entries.OptionsFlow):
+    """Handle options flow for Control4 Amplifier."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
         self.config_entry = config_entry
-        self._input_config = None
+        # Initialize from data instead of options
+        self._input_configs = dict(config_entry.data.get(CONF_INPUTS, create_default_inputs_config()))
+        self._output_configs = dict(config_entry.data.get(CONF_OUTPUTS, create_default_outputs_config()))
 
     async def async_step_init(
             self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Manage the options."""
-        return await self.async_step_input_config()
+        """First step in options flow."""
+        return await self.async_step_inputs()
 
-    async def async_step_input_config(
+    async def async_step_inputs(
             self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Configure all inputs at once."""
+        """Handle input configuration."""
         if user_input is not None:
-            self._input_config = user_input
-            return await self.async_step_output_config()
+            # Update input configurations
+            for i in range(1, 7):
+                enabled_key = f"input_{i}_enabled"
+                name_key = f"input_{i}_name"
+                if enabled_key in user_input:
+                    self._input_configs[str(i)] = {
+                        "name": user_input.get(name_key, DEFAULT_INPUT_LABELS[i]),
+                        "enabled": user_input[enabled_key]
+                    }
+            return await self.async_step_outputs()
 
-        options = self.config_entry.options
+        # Get current configuration from data
+        current_inputs = self.config_entry.data.get(CONF_INPUTS, {})
+
         schema = {}
-
-        # Add fields for each analog input
-        for i in range(1, NUM_ANALOG_INPUTS + 1):
-            input_name = DEFAULT_INPUT_NAMES["analog"].format(number=i)
-            schema.update({
-                vol.Optional(
-                    f"input_{i}_enabled",
-                    default=options.get(f"input_{i}_enabled", True)
-                ): selector.BooleanSelector(
-                    selector.BooleanSelectorConfig(
-                    )
-                ),
-                vol.Optional(
-                    f"input_{i}_name",
-                    default=options.get(f"input_{i}_name", input_name)
-                ): selector.TextSelector(
-                    selector.TextSelectorConfig(
-                        type=selector.TextSelectorType.TEXT
-                    )
-                ),
-                vol.Optional(
-                    f"input_{i}_gain",
-                    default=options.get(f"input_{i}_gain", 0)
-                ): vol.All(vol.Coerce(int), vol.Range(min=-12, max=12)),
+        for i in range(1, 7):
+            input_config = current_inputs.get(str(i), {
+                "name": DEFAULT_INPUT_LABELS[i],
+                "enabled": True
             })
-
-        # Add fields for each digital input
-        for i in range(1, NUM_DIGITAL_INPUTS + 1):
-            input_num = i + NUM_ANALOG_INPUTS
-            input_name = DEFAULT_INPUT_NAMES["digital"].format(number=i)
-            schema.update({
-                vol.Optional(
-                    f"input_{input_num}_enabled",
-                    default=options.get(f"input_{input_num}_enabled", True)
-                ): selector.BooleanSelector(
-                    selector.BooleanSelectorConfig(
-                    )
-                ),
-                vol.Optional(
-                    f"input_{input_num}_name",
-                    default=options.get(f"input_{input_num}_name", input_name)
-                ): selector.TextSelector(
-                    selector.TextSelectorConfig(
-                        type=selector.TextSelectorType.TEXT
-                    )
-                ),
-                vol.Optional(
-                    f"input_{input_num}_gain",
-                    default=options.get(f"input_{input_num}_gain", 0)
-                ): vol.All(vol.Coerce(int), vol.Range(min=-12, max=12)),
-            })
+            schema[vol.Required(f"input_{i}_enabled",
+                                default=input_config.get("enabled", True))] = bool
+            schema[vol.Required(f"input_{i}_name",
+                                default=input_config.get("name", DEFAULT_INPUT_LABELS[i]))] = str
 
         return self.async_show_form(
-            step_id="input_config",
+            step_id="inputs",
             data_schema=vol.Schema(schema),
+            description_placeholders={
+                "device_name": self.config_entry.title
+            },
         )
 
-    async def async_step_output_config(
+    async def async_step_outputs(
             self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Configure outputs."""
+        """Handle output configuration."""
         if user_input is not None:
-            combined_config = {**self._input_config, **user_input}
-            return self.async_create_entry(title="", data=combined_config)
+            # Save output configurations
+            for i in range(1, 5):
+                name_key = f"output_{i}_name"
+                if name_key in user_input:
+                    self._output_configs[str(i)] = {
+                        "name": user_input[name_key]
+                    }
 
-        options = self.config_entry.options
+            # Update the config entry's data instead of options
+            new_data = dict(self.config_entry.data)
+            new_data[CONF_INPUTS] = self._input_configs
+            new_data[CONF_OUTPUTS] = self._output_configs
+
+            self.hass.config_entries.async_update_entry(
+                self.config_entry,
+                data=new_data
+            )
+
+            return self.async_create_entry(title="", data={})
+
+        # Get current configuration from data
+        current_outputs = self.config_entry.data.get(CONF_OUTPUTS, {})
+
         schema = {}
-
-        for i in range(1, NUM_OUTPUTS + 1):
-            output_name = DEFAULT_OUTPUT_NAME.format(number=i)
-            schema.update({
-                vol.Optional(
-                    f"output_{i}_name",
-                    default=options.get(f"output_{i}_name", output_name)
-                ): selector.TextSelector(
-                    selector.TextSelectorConfig(
-                        type=selector.TextSelectorType.TEXT
-                    )
-                ),
-                vol.Optional(
-                    f"output_{i}_bass",
-                    default=options.get(f"output_{i}_bass", 0)
-                ): vol.All(vol.Coerce(int), vol.Range(min=-12, max=12)),
-                vol.Optional(
-                    f"output_{i}_treble",
-                    default=options.get(f"output_{i}_treble", 0)
-                ): vol.All(vol.Coerce(int), vol.Range(min=-12, max=12)),
+        for i in range(1, 5):
+            output_config = current_outputs.get(str(i), {
+                "name": DEFAULT_OUTPUT_LABELS[i]
             })
+            schema[vol.Required(f"output_{i}_name",
+                                default=output_config.get("name", DEFAULT_OUTPUT_LABELS[i]))] = str
 
         return self.async_show_form(
-            step_id="output_config",
+            step_id="outputs",
             data_schema=vol.Schema(schema),
+            description_placeholders={
+                "device_name": self.config_entry.title
+            },
         )

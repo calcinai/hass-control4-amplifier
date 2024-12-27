@@ -21,7 +21,7 @@ from .const import (
     CMD_BALANCE,
     CMD_INPUT_GAIN,
     CMD_BASS,
-    CMD_TREBLE, CMD_OUTPUT,
+    CMD_TREBLE, CMD_OUTPUT, BALANCE_MAX, BALANCE_MIN, GAIN_MAX, GAIN_MIN,
 )
 _LOGGER = logging.getLogger(__name__)
 
@@ -110,16 +110,14 @@ class Control4AmpCoordinator(DataUpdateCoordinator):
         self._transport = None
         self._lock = asyncio.Lock()
 
-        # Input mapping
-        # Key: Logical input number (1-6)
-        # Value: Tuple of (InputSource, physical_number)
+        # Input mapping updated to reflect correct digital inputs (1 and 3)
         self._input_map = {
             1: (InputSource.ANALOG, 1),  # Analog 1 (shares with Digital 1)
             2: (InputSource.ANALOG, 2),  # Analog 2
-            3: (InputSource.ANALOG, 3),  # Analog 3 (shares with Digital 2)
+            3: (InputSource.ANALOG, 3),  # Analog 3 (shares with Digital 3)
             4: (InputSource.ANALOG, 4),  # Analog 4
             5: (InputSource.DIGITAL, 1),  # Digital 1 (shares physical with Analog 1)
-            6: (InputSource.DIGITAL, 3),  # Digital 2 (shares physical with Analog 3)
+            6: (InputSource.DIGITAL, 3),  # Digital 3 (shares physical with Analog 3)
         }
 
     async def _async_create_udp_connection(self):
@@ -187,24 +185,30 @@ class Control4AmpCoordinator(DataUpdateCoordinator):
         await self.async_send_command(f"{CMD_VOLUME} {output:02d} {volume_hex}")
 
     async def async_set_balance(self, output: int, balance: int) -> None:
-        """Set balance for an output (-100 to 100)."""
+        """Set balance for an output (-10 to 10)."""
         if not 1 <= output <= NUM_OUTPUTS:
             _LOGGER.error("Invalid output number: %s", output)
             return
 
-        if not -100 <= balance <= 100:
+        if not BALANCE_MIN <= balance <= BALANCE_MAX:
             _LOGGER.error("Invalid balance value: %s", balance)
             return
 
         await self.async_send_command(f"{CMD_BALANCE} {output:02d} {balance:02d}")
 
-    async def async_set_input_gain(self, input_num: int, gain: int) -> None:
+    async def async_set_input_gain(self, input_num: int, gain: int, is_digital: bool = False) -> None:
         """Set input gain."""
-        if not 1 <= input_num <= (NUM_ANALOG_INPUTS + NUM_DIGITAL_INPUTS):
-            _LOGGER.error("Invalid input number: %s", input_num)
+        if is_digital and input_num not in [1, 3]:
+            _LOGGER.error("Invalid digital input number: %s", input_num)
             return
 
-        await self.async_send_command(f"{CMD_INPUT_GAIN} {input_num:02d} {gain:02d}")
+        if not GAIN_MIN <= gain <= GAIN_MAX:
+            _LOGGER.error("Invalid gain value: %s", gain)
+            return
+
+        # Adjust command based on whether it's digital or analog input
+        cmd_suffix = f"d{input_num}" if is_digital else str(input_num)
+        await self.async_send_command(f"{CMD_INPUT_GAIN} {cmd_suffix} {gain:02d}")
 
     async def async_set_bass(self, output: int, level: int) -> None:
         """Set bass level for an output (-12 to +12)."""

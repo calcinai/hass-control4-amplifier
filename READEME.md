@@ -4,18 +4,20 @@
 
 This integration provides control for Control4 Audio Matrix Amplifiers in Home Assistant.
 
+**Disclaimer: this was almost entirely written by Claude, so although tested, needs fleshing out.**
+
 ## Features
 
 - Control of 4 outputs with independent:
     - Volume control
     - Source selection
-    - Balance adjustment (-12 to +12)
+    - Balance adjustment (L10 to R10)
     - Bass adjustment (-12 to +12)
     - Treble adjustment (-12 to +12)
 - 6 logical inputs mapped to 4 physical inputs:
     - 4 analog inputs
     - 2 digital inputs (shared with analog inputs 1 and 3)
-- Individual gain control for each physical input (-12 to +12)
+- Individual gain control for each physical input (-6 to 0)
 
 ## Installation
 
