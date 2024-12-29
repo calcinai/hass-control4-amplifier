@@ -22,6 +22,9 @@ NUM_ANALOG_INPUTS = 4
 NUM_DIGITAL_INPUTS = 2
 NUM_OUTPUTS = 4
 
+# Special input value for power off state
+NO_INPUT_SOURCE = 0
+
 DEFAULT_INPUT_LABELS = {
     1: "Analog Input 1",
     2: "Analog Input 2",

@@ -21,8 +21,15 @@ from .const import (
     CMD_BALANCE,
     CMD_INPUT_GAIN,
     CMD_BASS,
-    CMD_TREBLE, CMD_OUTPUT, BALANCE_MAX, BALANCE_MIN, GAIN_MAX, GAIN_MIN,
+    CMD_TREBLE,
+    CMD_OUTPUT,
+    BALANCE_MAX,
+    BALANCE_MIN,
+    GAIN_MAX,
+    GAIN_MIN,
+    NO_INPUT_SOURCE,
 )
+
 _LOGGER = logging.getLogger(__name__)
 
 class InputSource(Enum):
@@ -43,44 +50,11 @@ class Control4AmpUDPProtocol(asyncio.DatagramProtocol):
         """Handle connection made."""
         self.transport = transport
 
-    # In coordinator.py, update the Control4AmpUDPProtocol class:
     def datagram_received(self, data, addr):
         """Handle received datagram."""
         message = data.decode()
         self._latest_response = message
         _LOGGER.debug("Received UDP message: %s", message)
-
-        # Parse the message (after counter)
-        # try:
-        #     _, command, *params = message.strip().split(" ")
-        #     if command == "c4.amp.chvol":
-        #         output, volume_hex = params
-        #         volume = (int(volume_hex, 16) - 160) / 100
-        #         self.hass.bus.async_fire(f"{DOMAIN}_volume_changed", {
-        #             "output": int(output),
-        #             "volume": volume
-        #         })
-        #     elif command in ["c4.amp.digital", "c4.amp.analog"]:
-        #         output, state = params
-        #         self.hass.bus.async_fire(f"{DOMAIN}_input_changed", {
-        #             "output": int(output),
-        #             "input_type": command.split(".")[-1],
-        #             "state": int(state)
-        #         })
-        #     elif command == "c4.amp.bass":
-        #         output, level = params
-        #         self.hass.bus.async_fire(f"{DOMAIN}_bass_changed", {
-        #             "output": int(output),
-        #             "level": int(level)
-        #         })
-        #     elif command == "c4.amp.treble":
-        #         output, level = params
-        #         self.hass.bus.async_fire(f"{DOMAIN}_treble_changed", {
-        #             "output": int(output),
-        #             "level": int(level)
-        #         })
-        # except Exception as ex:
-        #     _LOGGER.error("Error parsing message: %s - %s", message, ex)
 
         for callback in self._callbacks:
             callback(message)
@@ -163,6 +137,11 @@ class Control4AmpCoordinator(DataUpdateCoordinator):
 
     async def async_select_input(self, channel, input_number: int) -> None:
         """Select input by number."""
+        if input_number == NO_INPUT_SOURCE:
+            # Special case for "no input" (power off)
+            await self.async_send_command(f"{CMD_OUTPUT} {channel:02d} 00")
+            return
+
         if input_number not in self._input_map:
             _LOGGER.error("Invalid input number: %s", input_number)
             return
